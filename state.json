@@ -1,0 +1,47 @@
+{
+  "EID:00000000A552E749471F1C42B1B3A784ED1BB1B1E4CD2100": {
+    "status": "reminded",
+    "last_remind_at": "2025-09-10T16:45:00.989515"
+  },
+  "EID:00000000A552E749471F1C42B1B3A784ED1BB1B164D82100": {
+    "status": "replied",
+    "last_remind_at": null,
+    "detected_by": "FUZZ"
+  },
+  "EID:00000000A552E749471F1C42B1B3A784ED1BB1B1C4E32100": {
+    "last_remind_at": "2025-09-11T14:45:09.709405"
+  },
+  "EID:00000000A552E749471F1C42B1B3A784ED1BB1B124FE2100": {
+    "last_remind_at": "2025-09-12T13:36:21.370029"
+  },
+  "EID:00000000A552E749471F1C42B1B3A784ED1BB1B124082200": {
+    "status": "replied",
+    "last_remind_at": null,
+    "detected_by": "FUZZ"
+  },
+  "EID:00000000A552E749471F1C42B1B3A784ED1BB1B1040B2200": {
+    "status": "replied",
+    "last_remind_at": null,
+    "detected_by": "FUZZ"
+  },
+  "EID:00000000A552E749471F1C42B1B3A784ED1BB1B1242C2200": {
+    "status": "replied",
+    "last_remind_at": null,
+    "detected_by": "CID/TOPIC"
+  },
+  "EID:00000000A552E749471F1C42B1B3A784ED1BB1B1A41A2200": {
+    "status": "replied",
+    "last_remind_at": null,
+    "detected_by": "FUZZ"
+  },
+  "EID:00000000A552E749471F1C42B1B3A784ED1BB1B1C4352200": {
+    "status": "replied",
+    "last_remind_at": null,
+    "detected_by": "FUZZ"
+  },
+  "EID:00000000A552E749471F1C42B1B3A784ED1BB1B1A4352200": {
+    "status": "replied",
+    "last_remind_at": null,
+    "detected_by": "FUZZ"
+  }
+}
