@@ -14,8 +14,11 @@ import winreg
 import sys
 import win32com.client as win32
 import win32event
+import win32api
 import winerror
 import win32event
+from win10toast import ToastNotifier
+import ctypes
 
 # GUI and Tray Icon libraries
 import tkinter as tk
@@ -49,7 +52,6 @@ OL_FOLDER_DELETED = 3
 # ===== 시작 프로그램 등록/해제 =====
 import winreg
 import os
-
 import os, sys, winreg
 
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -102,6 +104,14 @@ def check_single_instance(mutex_name="AutoRemindCS_Mutex"):
         ctypes.windll.user32.MessageBoxW(0, "이미 Auto_Reminder가 실행 중입니다.", "Auto Reminder", 0x40)
         sys.exit(0)
 
+def show_startup_notification():
+    ctypes.windll.user32.MessageBoxW(
+        0,
+        "백그라운드에서 Auto Reminder가 실행 중입니다.",
+        "Auto Reminder 실행됨",
+        0x40  # MB_ICONINFORMATION
+    )
+
 
 
 # ===== 설정 파일 로드 =====
@@ -112,16 +122,16 @@ def load_body_map():
     except FileNotFoundError:
         # 기본 템플릿 생성
         cfg = {
-            "DN": "요청 자료가 **전부 없습니다**. 확인 후 회신 부탁드립니다.",
-            "DH": "요청 자료가 **절반만 도착**했습니다. 부족분 송부 부탁드립니다.",
-            "DA": "거의 완료되었습니다. **1~2개 자료만 추가**로 부탁드립니다.",
+            "remind_message": "지난 메일 관련하여 아직 회신이 확인되지 않아 정중히 리마인드드립니다.",
             "auto_start": False,
             "verbose": False
         }
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(cfg, f, ensure_ascii=False, indent=2)
 
-    # 혹시 누락된 키가 있으면 채워넣기
+    # 누락 키 보완
+    if "remind_message" not in cfg:
+        cfg["remind_message"] = "지난 메일 관련하여 아직 회신이 확인되지 않아 정중히 리마인드드립니다."
     if "auto_start" not in cfg:
         cfg["auto_start"] = False
     if "verbose" not in cfg:
@@ -129,67 +139,72 @@ def load_body_map():
 
     return cfg
 
+
 # ===== 설정창 GUI =====
 def create_and_show_gui():
-    window = tk.Tk()
-    window.title("메시지 템플릿 설정")
+    top = tk.Toplevel()
+    top.title("리마인드 메시지 설정")
 
     current_config = load_body_map()
-    entries = {}
 
-    # --- 상단 사용법 라벨 (작은 글씨, 줄바꿈/굵게 안내) ---
+    # --- 안내 라벨 ---
     guide_txt = (
         "■ 제목 코드 작성 예시\n"
-        "  • [DA1DAY] SN0000 Vendor 정보 요청 드립니다 → 하루 마다 리마인드 요청\n"
-        "  • [DN3H] H0000 Vendor 정보 요청 드립니다  → 3시간 뒤 리마인드 요청\n"
-        "  (코드 + 시간 단위 조합)\n"
-        "• 템플릿 입력 후 [저장]을 누르면 즉시 적용됩니다.\n"
-        "• 서식: **굵게**, *기울임*, 줄바꿈은 Enter. 목록은 - 또는 • 사용 가능.\n"
-        "• 실제 발송은 기본 폰트 ‘맑은 고딕 10pt’로 통일됩니다."
+        "  • [SHI1DAY] SN0000 Vendor 정보 요청 드립니다 → SHI 삼성중공업, 하루 마다 리마인드 요청\n"
+        "  • [HMD3H] H0000 Vendor 정보 요청 드립니다  → HMD 현대미포조선, 3시간 뒤 리마인드 요청\n"
+        "  • 메일 제목의 호선 이름은 항상 Full name으로 작성바랍니다. (ex:SN2693/H3525/H.2378)\n"
+        "  • 본문은 아래 입력된 메시지 하나로 고정되며, 사용자가 자유롭게 수정할 수 있습니다.\n"
+        "  • 서식: **굵게**, *기울임*, 줄바꿈은 Enter. 목록은 - 또는 • 사용 가능."
     )
-    guide = tk.Label(window, text=guide_txt, justify="left", anchor="w",
+    guide = tk.Label(top, text=guide_txt, justify="left", anchor="w",
                      fg="#555555", wraplength=760)
     guide.grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=(10, 6))
 
-    # --- DN/DH/DA 편집 칸 (텍스트 박스 크게 + 스크롤바) ---
-    row = 1
-    for key in ("DN", "DH", "DA"):
-        val = current_config.get(key, "")
-        tk.Label(window, text=f"{key} 메시지:").grid(row=row, column=0, sticky="nw", padx=10, pady=5)
+    # --- 리마인드 메시지 입력칸 ---
+    tk.Label(top, text="리마인드 메시지:").grid(row=1, column=0, sticky="nw", padx=10, pady=5)
+    frame = tk.Frame(top)
+    frame.grid(row=1, column=1, padx=10, pady=5, sticky="nsew")
+    top.grid_rowconfigure(1, weight=1)
+    top.grid_columnconfigure(1, weight=1)
 
-        # 프레임 안에 Text + Scrollbar (grid와 pack 섞지 않도록 frame 내부만 pack 사용)
-        frame = tk.Frame(window)
-        frame.grid(row=row, column=1, padx=10, pady=5, sticky="nsew")
-        window.grid_rowconfigure(row, weight=1)           # 행 확장
-        window.grid_columnconfigure(1, weight=1)          # 우측 칸 확장
+    text_widget = tk.Text(frame, width=80, height=10, wrap=tk.WORD)
+    scrollbar = tk.Scrollbar(frame, command=text_widget.yview)
+    text_widget.configure(yscrollcommand=scrollbar.set)
 
-        text_widget = tk.Text(frame, width=80, height=10, wrap=tk.WORD)
-        scrollbar = tk.Scrollbar(frame, command=text_widget.yview)
-        text_widget.configure(yscrollcommand=scrollbar.set)
+    text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+    text_widget.insert("1.0", current_config.get("remind_message", ""))
 
-        text_widget.insert("1.0", val)
-        entries[key] = text_widget
-        row += 1
-
-    # --- 체크박스: 자동실행 / Verbose 모드 ---
+    # --- 체크박스 ---
     auto_start_var = tk.BooleanVar(value=current_config.get("auto_start", False))
     verbose_var    = tk.BooleanVar(value=current_config.get("verbose", False))
 
-    cb_autostart = tk.Checkbutton(window, text="Windows 시작 시 자동 실행", variable=auto_start_var)
-    cb_autostart.grid(row=row, column=0, columnspan=2, sticky="w", padx=10, pady=(6, 0))
-    row += 1
+    cb_autostart = tk.Checkbutton(top, text="Windows 시작 시 자동 실행", variable=auto_start_var)
+    cb_autostart.grid(row=2, column=0, columnspan=2, sticky="w", padx=10, pady=(6, 0))
 
-    cb_verbose = tk.Checkbutton(window, text="DEBUG 로그 출력 (Verbose 모드)", variable=verbose_var)
-    cb_verbose.grid(row=row, column=0, columnspan=2, sticky="w", padx=10, pady=(0, 2))
-    row += 1
+    cb_verbose = tk.Checkbutton(top, text="DEBUG 로그 출력 (Verbose 모드)", variable=verbose_var)
+    cb_verbose.grid(row=3, column=0, columnspan=2, sticky="w", padx=10, pady=(0, 2))
 
-    verbose_hint = tk.Label(window, text="※ 운영 중에는 끄는 것을 권장합니다. 문제 발생 시만 켜서 상세 로그를 확인하세요.",
-                            fg="#666666", justify="left", anchor="w", wraplength=760)
-    verbose_hint.grid(row=row, column=0, columnspan=2, sticky="w", padx=10, pady=(0, 8))
-    row += 1
+    # --- 저장 버튼 ---
+    def save_config():
+        new_cfg = {
+            "remind_message": text_widget.get("1.0", tk.END).strip(),
+            "auto_start": auto_start_var.get(),
+            "verbose": verbose_var.get()
+        }
+        try:
+            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump(new_cfg, f, ensure_ascii=False, indent=2)
+            messagebox.showinfo("저장 완료", "설정이 성공적으로 저장되었습니다.")
+            top.destroy()
+        except Exception as e:
+            messagebox.showerror("오류", f"저장 중 오류가 발생했습니다: {e}")
+
+    btn_frame = tk.Frame(top)
+    btn_frame.grid(row=4, column=1, sticky="e", padx=10, pady=10)
+    tk.Button(btn_frame, text="저장", command=save_config).pack(side=tk.LEFT, padx=5)
+    tk.Button(btn_frame, text="취소", command=top.destroy).pack(side=tk.LEFT)
 
     # --- 저장/취소 버튼 ---
     def save_config():
@@ -226,26 +241,25 @@ def create_and_show_gui():
 
             log("[INFO] Configuration saved and updated.")
             messagebox.showinfo("저장 완료", "설정이 성공적으로 저장되었습니다.")
-            window.destroy()
+            top.destroy()
 
         except Exception as e:
             messagebox.showerror("오류", f"저장 중 오류가 발생했습니다: {e}")
 
-    btn_frame = tk.Frame(window)
+    btn_frame = tk.Frame(top)
     btn_frame.grid(row=row, column=1, sticky="e", padx=10, pady=10)
 
     tk.Button(btn_frame, text="저장", command=save_config).pack(side=tk.LEFT, padx=5)
-    tk.Button(btn_frame, text="취소", command=window.destroy).pack(side=tk.LEFT)
+    tk.Button(btn_frame, text="취소", command=top.destroy).pack(side=tk.LEFT)
 
-    window.mainloop()
 
 
 
 BODY_MAP = load_body_map()
 REMIND_SUBJECT_PREFIX = "[Remind] "
 REMIND_BODY_HTML_TOP_DEFAULT = (
-    "<p>안녕하세요.</p>"
-    "<p>지난 메일 관련하여 아직 회신이 확인되지 않아 정중히 리마인드드립니다.</p>"
+    "<p>안녕하십니까, 씨넷 CS팀 ㅇㅇㅇ엔지니어입니다.</p>"
+    "<p>지난 메일 관련하여 아직 회신이 확인되지 않아 정중히 리마인드 드립니다.</p>"
     "<p>확인 부탁드립니다. 감사합니다.</p>"
 )
 
@@ -333,22 +347,32 @@ def save_state(st):
         json.dump(st, f, ensure_ascii=False, indent=2)
     os.replace(tmp, STATE_FILE)
 
-def parse_fu_tag(subject):
-    if not subject: return None, None
-    s = subject.upper().replace("［","[").replace("］","]")
-    m = re.search(r"\[(D[ANH]|F[UIP])\s*(\d+)\s*(MIN|H|D|W|M)\]", s)
-    if not m:
-        if "[FU1MIN]" in re.sub(r"\s+","",s):
-            return "FU", 1/1440.0
+def parse_yard_tag(subject):
+    """
+    제목에서 [조선소코드+기간] 패턴 인식
+    예: [SHI3D], [HMD12H], [HHI1W], [HSHI30MIN]
+    반환: (yard_code, interval_days)
+    """
+    if not subject:
         return None, None
-    code = m.group(1); num = int(m.group(2)); unit = m.group(3)
-    if unit=="MIN": interval_days = num/1440.0
-    elif unit=="H": interval_days = num/24.0
-    elif unit=="D": interval_days = float(num)
-    elif unit=="W": interval_days = float(num)*7.0
-    elif unit=="M": interval_days = float(num)*30.0
-    else: return None, None
-    return code, interval_days
+
+    s = subject.upper().replace("［", "[").replace("］", "]")
+    m = re.search(r"\[(SHI|HMD|HHI|HSHI|HO|HJSC)(\d+)(MIN|H|D|W|M)\]", s)
+    if not m:
+        return None, None
+
+    yard = m.group(1)              # 조선소 코드
+    num = int(m.group(2))          # 숫자
+    unit = m.group(3)              # 시간 단위
+
+    if unit == "MIN": interval_days = num / 1440.0
+    elif unit == "H": interval_days = num / 24.0
+    elif unit == "D": interval_days = float(num)
+    elif unit == "W": interval_days = float(num) * 7.0
+    elif unit == "M": interval_days = float(num) * 30.0
+    else: interval_days = None
+
+    return yard, interval_days
 
 PREFIXES = ["re:", "fw:", "fwd:", "답장:", "회신:", "전달:", "참조:", "回覆:", "転送:"]
 
@@ -456,6 +480,24 @@ def headers_contain_original(headers, orig_msgid):
     if not headers or not orig_msgid: return False
     return orig_msgid.strip().lower() in headers.lower()
 
+def get_sender_address(mail_item):
+    """
+    Outlook MailItem에서 발신자 SMTP 주소를 안전하게 추출
+    """
+    try:
+        addr = getattr(mail_item, "SenderEmailAddress", None)
+        if addr:
+            return addr.lower()
+    except Exception:
+        pass
+    try:
+        ae = getattr(mail_item, "Sender", None)
+        if ae:
+            return (ae.Address or ae.Name).lower()
+    except Exception:
+        pass
+    return None
+
 def conv_key(mail):
     try:
         msgid = mail.PropertyAccessor.GetProperty(PR_INTERNET_MESSAGE_ID)
@@ -474,41 +516,6 @@ def conv_key(mail):
     sent_on = to_local_naive(getattr(mail,"SentOn",None))
     sent_key = sent_on.strftime("%Y-%m-%d %H:%M:%S") if sent_on else "NA"
     return f"TOPIC:{topic}|SENT:{sent_key}"
-
-def has_reply_via_conversation(ns, original_item, after_dt_naive, verbose=False, include_self=False, include_deleted=False):
-    try: conv = original_item.GetConversation()
-    except Exception: conv = None
-    if not conv: return False
-    me_set = my_addresses(ns)
-    try: table = conv.GetTable()
-    except Exception: return False
-    try:
-        while not table.EndOfTable:
-            row = table.GetNextRow()
-            eid = row["EntryID"] if "EntryID" in row else None
-            if not eid: continue
-            try: item = ns.GetItemFromID(eid)
-            except Exception: continue
-            try:
-                if getattr(item,"Class",None)!=OL_MAILITEM: continue
-                try:
-                    if item.EntryID==original_item.EntryID: continue
-                except Exception: pass
-                if (not include_self) and is_from_me(item, me_set): continue
-                if (not include_deleted):
-                    try:
-                        if _is_under_deleted(item.Parent, _get_deleted_roots(ns)): continue
-                    except Exception: pass
-                rt = to_local_naive(getattr(item,"ReceivedTime",None))
-                if not rt or rt<=after_dt_naive: continue
-                if verbose:
-                    log(f"[REPLY*:CONV] {item.Parent.FolderPath} / {rt:%Y-%m-%d %H:%M:%S} / {item.SenderName} / {item.Subject}")
-                return True
-            except Exception:
-                continue
-    except Exception:
-        return False
-    return False
 
 def has_reply_global_hdr_only(ns, orig_msgid, after_dt_naive, verbose=False, include_self=False, include_deleted=False):
     if not orig_msgid: return False
@@ -804,82 +811,133 @@ def _safe_recipients_from(original_item):
     if (not cc_list) and raw_cc: cc_list=[raw_cc]
     return "; ".join([x for x in to_list if x]), "; ".join([x for x in cc_list if x])
 
-def send_remind_with_signature_v7(app, original_item, code, verbose=False):
-    # 0) 상단 리마인드 문구 구성
-    raw_text = BODY_MAP.get(code)
-    body_html_top = REMIND_BODY_HTML_TOP_DEFAULT if not raw_text else format_body_text(raw_text)
-
-    # 1) ReplyAll로 초안 생성 → 아웃룩 회신 레이아웃/인라인 이미지/원본 헤더 자동 유지
-    mail = original_item.ReplyAll()
-    try:
-        mail.BodyFormat = 2  # olFormatHTML
-    except Exception:
-        pass
-
-    # 2) 서명 HTML 확보(임시 아이템에서 추출) 후, CID를 현재 mail 아이템 기준으로 부착
-    _sig_probe = app.CreateItem(0)
-    sig_html = _sig_probe.HTMLBody or ""
-    try:
-        _sig_probe.Close(0)
-    except Exception:
-        pass
-    # 서명 리소스들을 현재 mail 아이템에 첨부하고 <img src="...">를 cid:로 rewrite
-    sig_html = _attach_images_and_rewrite_html(mail, sig_html)
-
-    # 3) 상단에 리마인드 문구 + 서명을 prepend, 아래는 ReplyAll이 만든 기존 본문 유지
-    #    (원본 본문/인라인 이미지는 ReplyAll 쪽에서 이미 보존됨)
-    # 3) 상단에 리마인드 문구 + 서명을 prepend, 서식을 맑은고딕 10pt로 통일
-    style_wrapper = (
-        "<div style='font-family:Malgun Gothic, sans-serif; font-size:10pt;'>"
-        f"{body_html_top}<br><br>{sig_html}{mail.HTMLBody}"
-        "</div>"
-    )
-    mail.HTMLBody = style_wrapper
-
-
-    # 4) 제목: Reply 스타일의 "RE: ..."는 유지하고, 우리는 [Remind] 접두만 추가
-    try:
-        mail.Subject = REMIND_SUBJECT_PREFIX + (mail.Subject or "")
-    except Exception:
-        pass
-
-    # 5) 수신자/참조: ReplyAll이 이미 채워 놓음 → 별도 To/CC 설정 불필요
-    if verbose:
+def send_remind_for_recipients(app, item, subject, body, yard_code, state, dry_run=False, verbose=False):
+    """
+    To/BCC 각각을 개별 추적하여 리마인드 발송.
+    - 원본 메일은 Forward()로 붙여 인라인 이미지/첨부 유지
+    - BCC-only 시 To에 본인 주소를 채워 안전 발송
+    """
+    def _self_smtp():
+        # 가능한 한 SMTP 주소 얻기
         try:
-            log(f"[TO] {mail.To if mail.To else '(empty)'} | [CC] {mail.CC if mail.CC else '(none)'}")
+            ae = app.Session.CurrentUser.AddressEntry
+            exu = ae.GetExchangeUser()
+            return (exu.PrimarySmtpAddress if exu else ae.Address) or None
         except Exception:
-            pass
+            return None
 
-    # 6) 전송
-    ok = False
     try:
-        if not mail.To and not mail.CC:
-            log("[ERR] No recipients (To/CC empty)")
-            return False
-        if not mail.Recipients.ResolveAll():
-            log("[ERR] Recipients not resolved")
+        # 수신자 목록 수집 (To=1, BCC=3만)
+        recipients = []
+        for r in item.Recipients:
+            try:
+                if r.Type in (1, 3):
+                    addr = getattr(r, "Address", None) or getattr(r, "Name", None)
+                    if addr:
+                        recipients.append((addr, r.Type))
+            except Exception:
+                continue
+
+        if not recipients:
+            if verbose: log("[WARN] no To/BCC recipients on original mail")
             return False
 
-        try:
-            # 1) Save 먼저
-            mail.Save()
-            # 2) EntryID로 다시 바인딩
-            ns = app.GetNamespace("MAPI")
-            draft = ns.GetItemFromID(mail.EntryID)
-            # 3) 새 객체로만 Send
-            draft.Send()
-            ok = True
-            if verbose:
-                log(f"[SENT] {draft.To or '(empty)'} | {draft.Subject} ({code})")
-        except Exception as e:
-            log(f"[ERR-SEND] {e}")
-            return False
+        # Remind 상단 메시지 준비
+        remind_text = load_body_map().get("remind_message", body or "")
+        remind_html = format_body_text(remind_text)
+
+        me_addr = _self_smtp() or getattr(item, "SenderEmailAddress", None) or "jhunpark@sea-net.co.kr"
+        sent_any = False
+
+        for addr, rtype in recipients:
+            # 개별 수신자별 상태 키
+            state_key = make_state_key(item.EntryID, addr)
+            if state.get(state_key, {}).get("reply_received", False):
+                continue
+
+            # 원본을 포워드하여 히스토리/이미지 보존
+            fwd = item.Forward()
+            fwd.Subject = f"[Remind] {subject}"
+            fwd.BodyFormat = 2  # olFormatHTML
+            # Remind 메시지를 최상단에 삽입 (그 아래에 -----Original Message----- 가 붙음)
+            fwd.HTMLBody = (
+                "<div style='font-family:Malgun Gothic,Segoe UI,Arial,sans-serif; font-size:10pt;'>"
+                f"{remind_html}"
+                "</div><br>" + fwd.HTMLBody
+            )
+            fwd.HTMLBody = _sanitize_bad_cids(_attach_images_and_rewrite_html(fwd, HTMLBODY))
+
+            # 수신자 세팅
+            if rtype == 1:      # To
+                fwd.To = addr
+            else:               # BCC
+                if not fwd.To:  # BCC-only 보호
+                    fwd.To = me_addr
+                recip = fwd.Recipients.Add(addr)
+                recip.Type = 3  # BCC
+
+            try:
+                fwd.Recipients.ResolveAll()
+            except Exception:
+                pass
+
+            if dry_run:
+                log(f"[DRY-RUN] Would send | {fwd.Subject} ({yard_code}) | To={fwd.To}, CC={fwd.CC}, BCC={fwd.BCC}")
+                continue
+
+            try:
+                fwd.Save()
+                fwd.Send()
+                sent_any = True
+                if verbose:
+                    log(f"[SENT] To={fwd.To}, CC={fwd.CC}, BCC={fwd.BCC} | {fwd.Subject} ({yard_code})")
+                state[state_key] = {"reply_received": False, "last_sent": now_naive().isoformat()}
+            except Exception as e:
+                log(f"[ERR-SEND] {e}")  # 이 주소만 실패, 다음 주소 계속
+
+        return True if (dry_run or sent_any) else False
 
     except Exception as e:
         log(f"[ERR-SEND] {e}")
         return False
 
-    return ok
+
+
+
+def mark_reply_received(original_item, reply_item, state):
+    """
+    To + BCC 각각 개별적으로 reply_received = True 처리
+    """
+    try:
+        replied_addr = reply_item.SenderEmailAddress.lower().strip()
+        for recip in original_item.Recipients:
+            if recip.Type in (1, 3):  # To, BCC만 추적
+                if recip.Address and recip.Address.lower().strip() == replied_addr:
+                    state_key = make_state_key(original_item.EntryID, recip.Address)
+                    if state.get(state_key):
+                        state[state_key]["reply_received"] = True
+                        log(f"[INFO] Marked reply received for {replied_addr}")
+    except Exception as e:
+        log(f"[ERR-MARK-REPLY] {e}")
+
+
+def check_reply_exists(original_item, replies, state):
+    """
+    수신된 reply가 To/BCC 중 누구의 것인지 확인해서 state 업데이트
+    """
+    try:
+        for reply in replies:
+            replied_addr = reply.SenderEmailAddress.lower().strip()
+            for recip in original_item.Recipients:
+                if recip.Type in (1, 3):
+                    if recip.Address and recip.Address.lower().strip() == replied_addr:
+                        state_key = make_state_key(original_item.EntryID, recip.Address)
+                        if state.get(state_key) and not state[state_key]["reply_received"]:
+                            state[state_key]["reply_received"] = True
+                            log(f"[REPLY] {replied_addr} replied → stop reminders for this recipient")
+    except Exception as e:
+        log(f"[ERR-CHK-REPLY] {e}")
+
 
 def is_empty_draft(item):
     try:
@@ -947,7 +1005,7 @@ def cycle_once(ns, app, state, lookback_days, dry_run, force_send, skip_reply_ch
             if subject.lstrip().upper().startswith("[REMIND]"):
                 if verbose: log("[SKIP] reminder mail itself")
                 continue
-            code, interval_days = parse_fu_tag(subject)
+            code, interval_days = parse_yard_tag(subject)
             if not code: continue
 
             sent_on = to_local_naive(getattr(mail,"SentOn",None))
@@ -1120,7 +1178,17 @@ def cycle_once(ns, app, state, lookback_days, dry_run, force_send, skip_reply_ch
             if dry_run:
                 log(f"[DRY-RUN] Would send | {subject} ({code})")
             else:
-                ok = send_remind_with_signature_v7(app, mail, code, verbose=verbose)
+                subj = subject
+                body = mail.Body or ""
+                ok = send_remind_for_recipients(
+                    app,
+                    mail,
+                    subject,
+                    body or "",
+                    code,
+                    state,
+                    dry_run=dry_run,
+                    verbose=verbose)
                 if ok:
                     sent_count += 1
                     state[key]["last_remind_at"] = now_ts.isoformat()
@@ -1166,10 +1234,6 @@ def cycle_once(ns, app, state, lookback_days, dry_run, force_send, skip_reply_ch
         else:
             if verbose:
                 log("[CLEANUP-SKIP] cleanup delayed; not yet interval")
-
-
-
-
 
 def _has_newer_outgoing_with_same_subject(ns, canon_subj: str, sent_on: datetime, include_deleted=False, verbose=False):
     try:
@@ -1225,6 +1289,22 @@ def _has_newer_outgoing_with_same_subject(ns, canon_subj: str, sent_on: datetime
 # ---- Main Application Logic for Background Execution ----
 exit_event = threading.Event()
 
+def mark_reply_received(original_item, reply_item, state):
+    try:
+        sender = reply_item.SenderEmailAddress.lower()
+    except Exception:
+        return
+
+    for r in original_item.Recipients:
+        if r.Address and r.Address.lower() == sender:
+            key = make_state_key(original_item.EntryID, r.Address)
+            if key not in state:
+                state[key] = {}
+            state[key]["replied"] = True
+            log(f"[REPLY-DETECTED] {r.Address} replied, stop reminders for this recipient")
+            return
+
+
 def start_mail_check_loop(args):
     """The main loop that runs in a background thread."""
     st = load_state()
@@ -1243,12 +1323,12 @@ def start_mail_check_loop(args):
         log(f"[INFO] Cycle finished. Waiting for {args.interval_min} minute(s).")
         exit_event.wait(args.interval_min * 60)
 
-def open_settings_window(icon, item):
-    """Callback to open the GUI settings window."""
-    log("[INFO] Settings window requested.")
-    gui_thread = threading.Thread(target=create_and_show_gui)
-    gui_thread.daemon = True
-    gui_thread.start()
+root = tk.Tk()
+root.withdraw()
+
+def open_settings_window():
+    import subprocess, sys, os
+    subprocess.Popen([sys.executable, os.path.abspath(__file__), "--show-settings"])
 
 def exit_action(icon, item):
     """Callback to gracefully exit the application."""
@@ -1256,8 +1336,12 @@ def exit_action(icon, item):
     exit_event.set()
     icon.stop()
 
+def make_state_key(entry_id, recipient_addr):
+    return f"{entry_id}|{recipient_addr.lower()}"
+
 if __name__ == "__main__":
     check_single_instance()
+    show_startup_notification()
     cfg = load_body_map()
     VERBOSE = cfg.get("verbose", False)
 
